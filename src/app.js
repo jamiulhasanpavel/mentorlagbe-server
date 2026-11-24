@@ -1,7 +1,6 @@
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
-import { errorHandler, notFoundHandler } from "./middlewares/errorHandler.js";
 
 const app = express();
 
@@ -26,8 +25,5 @@ app.get("/api/health", (req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
-
-app.use(notFoundHandler);
-app.use(errorHandler);
 
 export default app;

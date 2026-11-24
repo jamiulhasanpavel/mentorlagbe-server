@@ -11,6 +11,8 @@
   "keywords": [],
   "type": "module",
   "dependencies": {
+    "@better-auth/mongo-adapter": "^1.7.28",
+    "better-auth": "^1.7.28",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^18.0.10",
