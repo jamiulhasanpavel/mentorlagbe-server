@@ -14,6 +14,9 @@ const startServer = async () => {
 
 startServer().catch((error) => {
   console.error("Failed to start server:", error.message);
+  if (process.env.MONGODB_URI?.includes("<username>")) {
+    console.error("Set the real MongoDB Atlas URI in .env");
+  }
   process.exit(1);
 });
 

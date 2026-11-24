@@ -13,7 +13,9 @@ export const connectDB = async () => {
     throw new Error("MONGODB_URI is required");
   }
 
-  client = new MongoClient(uri);
+  client = new MongoClient(uri, {
+    serverSelectionTimeoutMS: 10000,
+  });
   await client.connect();
   db = client.db(process.env.DB_NAME || "mentorlagbe");
   console.log("Successfully connected to MongoDB");
