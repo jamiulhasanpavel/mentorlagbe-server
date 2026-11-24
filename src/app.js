@@ -5,6 +5,7 @@ import userRoutes from "./routes/user.routes.js";
 import tuitionRoutes from "./routes/tuition.routes.js";
 import applicationRoutes from "./routes/application.routes.js";
 import uploadRoutes from "./routes/upload.routes.js";
+import paymentRoutes, { webhookRoutes } from "./routes/payment.routes.js";
 
 const app = express();
 
@@ -15,6 +16,9 @@ app.use(
   }),
 );
 app.use(cookieParser());
+
+app.use("/api/payments", webhookRoutes);
+
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
@@ -34,5 +38,6 @@ app.use("/api/users", userRoutes);
 app.use("/api/tuition", tuitionRoutes);
 app.use("/api/applications", applicationRoutes);
 app.use("/api/profile", uploadRoutes);
+app.use("/api/payments", paymentRoutes);
 
 export default app;
