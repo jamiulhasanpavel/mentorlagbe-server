@@ -4,6 +4,7 @@ import express from "express";
 import userRoutes from "./routes/user.routes.js";
 import tuitionRoutes from "./routes/tuition.routes.js";
 import applicationRoutes from "./routes/application.routes.js";
+import uploadRoutes from "./routes/upload.routes.js";
 
 const app = express();
 
@@ -32,5 +33,6 @@ app.get("/api/health", (req, res) => {
 app.use("/api/users", userRoutes);
 app.use("/api/tuition", tuitionRoutes);
 app.use("/api/applications", applicationRoutes);
+app.use("/api/profile", uploadRoutes);
 
 export default app;
