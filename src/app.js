@@ -3,6 +3,7 @@ import cors from "cors";
 import express from "express";
 import userRoutes from "./routes/user.routes.js";
 import tuitionRoutes from "./routes/tuition.routes.js";
+import applicationRoutes from "./routes/application.routes.js";
 
 const app = express();
 
@@ -30,5 +31,6 @@ app.get("/api/health", (req, res) => {
 
 app.use("/api/users", userRoutes);
 app.use("/api/tuition", tuitionRoutes);
+app.use("/api/applications", applicationRoutes);
 
 export default app;
