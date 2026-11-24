@@ -15,17 +15,43 @@ const getSession = async (req) => {
 
 router.get("/", async (req, res, next) => {
   try {
-    const { status = "approved", subject } = req.query;
+    const {
+      status = "approved",
+      subject,
+      search,
+      page = "1",
+      limit = "10",
+      sort = "newest",
+    } = req.query;
+    const pageNumber = Math.max(1, Number.parseInt(String(page), 10) || 1);
+    const limitNumber = Math.min(
+      100,
+      Math.max(1, Number.parseInt(String(limit), 10) || 10),
+    );
     const filter = {};
 
     if (status) filter.status = status;
     if (subject) filter.subject = { $regex: String(subject), $options: "i" };
+    if (search) {
+      const searchPattern = { $regex: String(search).trim(), $options: "i" };
+      filter.$or = [
+        { title: searchPattern },
+        { subject: searchPattern },
+        { description: searchPattern },
+        { location: searchPattern },
+      ];
+    }
 
-    const tuitions = await getDB()
-      .collection("tuition")
-      .find(filter)
-      .sort({ createdAt: -1 })
-      .toArray();
+    const collection = getDB().collection("tuition");
+    const [total, tuitions] = await Promise.all([
+      collection.countDocuments(filter),
+      collection
+        .find(filter)
+        .sort(sort === "oldest" ? { createdAt: 1 } : { createdAt: -1 })
+        .skip((pageNumber - 1) * limitNumber)
+        .limit(limitNumber)
+        .toArray(),
+    ]);
 
     res.json({
       success: true,
@@ -33,6 +59,12 @@ router.get("/", async (req, res, next) => {
         ...tuition,
         id: String(_id),
       })),
+      pagination: {
+        page: pageNumber,
+        limit: limitNumber,
+        total,
+        totalPages: Math.ceil(total / limitNumber),
+      },
     });
   } catch (error) {
     next(error);
