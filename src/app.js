@@ -1,6 +1,7 @@
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
+import userRoutes from "./routes/user.routes.js";
 
 const app = express();
 
@@ -24,6 +25,8 @@ app.get("/api/health", (req, res) => {
     message: "API is healthy",
     timestamp: new Date().toISOString(),
   });
+
+  app.use("/api/users", userRoutes);
 });
 
 export default app;
