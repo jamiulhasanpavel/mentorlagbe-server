@@ -6,6 +6,10 @@ export const tuitionSchema = z.object({
   description: z.string().trim().max(5000).optional(),
   location: z.string().trim().max(200).optional(),
   budget: z.number().nonnegative().optional(),
+  className: z.string().trim().max(80).optional(),
+  schedule: z.string().trim().max(100).optional(),
+  mode: z.enum(["Online", "At student home", "At tutor home", "Hybrid"]).optional(),
+  gender: z.string().trim().max(80).optional(),
 });
 
 export const tuitionStatusSchema = z.object({

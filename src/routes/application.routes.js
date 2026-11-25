@@ -22,8 +22,8 @@ router.post("/", async (req, res, next) => {
     if (!session) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
-    if (session.user.role !== "tutor") {
-      return res.status(403).json({ success: false, message: "Tutor access required" });
+    if (session.user.role !== "student") {
+      return res.status(403).json({ success: false, message: "Student access required" });
     }
 
     const parsed = applicationSchema.safeParse(req.body);
@@ -41,23 +41,40 @@ router.post("/", async (req, res, next) => {
     const db = getDB();
     const tuition = await db.collection("tuition").findOne({
       _id: new ObjectId(parsed.data.tuitionId),
+      status: "approved",
+      isActive: { $ne: false },
     });
     if (!tuition) {
-      return res.status(404).json({ success: false, message: "Tuition not found" });
+      return res.status(404).json({ success: false, message: "Approved tuition not found" });
+    }
+    if (tuition.userId === session.user.id) {
+      return res.status(403).json({ success: false, message: "You cannot apply to your own tuition" });
     }
 
     const existing = await db.collection("application").findOne({
       tuitionId: parsed.data.tuitionId,
-      tutorId: session.user.id,
+      studentId: session.user.id,
     });
     if (existing) {
       return res.status(409).json({ success: false, message: "Application already submitted" });
     }
 
+    if (!(session.user.plan === "student-plus" && session.user.planStatus === "active")) {
+      const applicationCount = await db.collection("application").countDocuments({
+        studentId: session.user.id,
+      });
+      if (applicationCount >= 1) {
+        return res.status(403).json({
+          success: false,
+          message: "Free student accounts can submit one application. Upgrade to Student Pro for unlimited applications.",
+        });
+      }
+    }
+
     const now = new Date();
     const application = {
       tuitionId: parsed.data.tuitionId,
-      tutorId: session.user.id,
+      studentId: session.user.id,
       message: parsed.data.message,
       status: "pending",
       createdAt: now,
@@ -81,17 +98,72 @@ router.get("/me", async (req, res, next) => {
     if (!session) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
+    if (session.user.role !== "student") {
+      return res.status(403).json({ success: false, message: "Student access required" });
+    }
 
-    const applications = await getDB()
+    const db = getDB();
+    const applications = await db
       .collection("application")
-      .find({ tutorId: session.user.id })
+      .find({ studentId: session.user.id })
       .sort({ createdAt: -1 })
       .toArray();
+    const tuitionIds = applications
+      .map(({ tuitionId }) => tuitionId)
+      .filter((id) => ObjectId.isValid(id))
+      .map((id) => new ObjectId(id));
+    const tuitions = tuitionIds.length
+      ? await db.collection("tuition")
+        .find({ _id: { $in: tuitionIds } })
+        .project({ _id: 1, title: 1 })
+        .toArray()
+      : [];
+    const tuitionTitles = new Map(tuitions.map(({ _id, title }) => [String(_id), title]));
 
     res.json({
       success: true,
       data: applications.map(({ _id, ...application }) => ({
         ...application,
+        tuitionTitle: tuitionTitles.get(application.tuitionId) || "Tuition no longer available",
+        id: String(_id),
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/tutor", async (req, res, next) => {
+  try {
+    const session = await getSession(req);
+    if (!session) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    if (session.user.role !== "tutor") {
+      return res.status(403).json({ success: false, message: "Tutor access required" });
+    }
+
+    const db = getDB();
+    const tuitions = await db.collection("tuition")
+      .find({ userId: session.user.id })
+      .project({ _id: 1, title: 1 })
+      .toArray();
+    const tuitionIds = tuitions.map(({ _id }) => String(_id));
+    const applications = tuitionIds.length
+      ? await db.collection("application")
+        .find({ tuitionId: { $in: tuitionIds } })
+        .sort({ createdAt: -1 })
+        .toArray()
+      : [];
+    const tuitionTitles = new Map(
+      tuitions.map(({ _id, title }) => [String(_id), title]),
+    );
+
+    res.json({
+      success: true,
+      data: applications.map(({ _id, ...application }) => ({
+        ...application,
+        tuitionTitle: tuitionTitles.get(application.tuitionId) || "",
         id: String(_id),
       })),
     });
@@ -106,8 +178,8 @@ router.patch("/:id/status", async (req, res, next) => {
     if (!session) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
-    if (session.user.role !== "student" && session.user.role !== "admin") {
-      return res.status(403).json({ success: false, message: "Tuition owner or admin access required" });
+    if (session.user.role !== "tutor" && session.user.role !== "admin") {
+      return res.status(403).json({ success: false, message: "Tutor or admin access required" });
     }
     if (!ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ success: false, message: "Invalid application ID" });
@@ -126,7 +198,7 @@ router.patch("/:id/status", async (req, res, next) => {
       return res.status(404).json({ success: false, message: "Application not found" });
     }
 
-    if (session.user.role === "student") {
+    if (session.user.role === "tutor") {
       const tuition = await db.collection("tuition").findOne({
         _id: new ObjectId(application.tuitionId),
         userId: session.user.id,
@@ -142,6 +214,10 @@ router.patch("/:id/status", async (req, res, next) => {
       { returnDocument: "after" },
     );
 
+    if (!result) {
+      return res.status(404).json({ success: false, message: "Application not found" });
+    }
+
     const { _id, ...data } = result;
     res.json({ success: true, message: "Application status updated", data: { ...data, id: String(_id) } });
   } catch (error) {
@@ -155,14 +231,18 @@ router.delete("/:id", async (req, res, next) => {
     if (!session) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
+    if (session.user.role !== "student" && session.user.role !== "admin") {
+      return res.status(403).json({ success: false, message: "Student or admin access required" });
+    }
     if (!ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ success: false, message: "Invalid application ID" });
     }
 
+    const db = getDB();
     const filter = { _id: new ObjectId(req.params.id) };
-    if (session.user.role !== "admin") filter.tutorId = session.user.id;
+    if (session.user.role !== "admin") filter.studentId = session.user.id;
 
-    const result = await getDB().collection("application").deleteOne(filter);
+    const result = await db.collection("application").deleteOne(filter);
     if (!result.deletedCount) {
       return res.status(404).json({ success: false, message: "Application not found" });
     }
