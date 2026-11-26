@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { ObjectId } from "mongodb";
+import { z } from "zod";
 import { getDB } from "../config/db.js";
 import { createAuth } from "../config/auth.js";
 import { tuitionSchema, tuitionStatusSchema } from "../validations/tuition.validation.js";
 
 const router = Router();
+const tuitionActiveSchema = z.object({ isActive: z.boolean() });
 
 const getSession = async (req) => {
   const auth = createAuth(getDB());
@@ -12,6 +14,8 @@ const getSession = async (req) => {
     headers: new Headers({ cookie: req.headers.cookie || "" }),
   });
 };
+
+const toDatabaseId = (id) => (ObjectId.isValid(id) ? new ObjectId(id) : id);
 
 const getQueryValue = (value) =>
   typeof value === "string" ? value.trim().slice(0, 100) : "";
@@ -183,6 +187,45 @@ router.post("/", async (req, res, next) => {
       });
     }
 
+    const db = getDB();
+    const userId = toDatabaseId(session.user.id);
+    const users = db.collection("user");
+    const user = await users.findOne(
+      { _id: userId },
+      { projection: { plan: 1, planStatus: 1, tuitionCount: 1 } },
+    );
+    if (!user) {
+      return res.status(404).json({ success: false, message: "Tutor account not found" });
+    }
+
+    if (typeof user.tuitionCount !== "number") {
+      const currentCount = await db.collection("tuition").countDocuments({
+        userId: session.user.id,
+      });
+      await users.updateOne(
+        { _id: userId, tuitionCount: { $not: { $type: "number" } } },
+        { $set: { tuitionCount: currentCount } },
+      );
+    }
+
+    const isProTutor = user.plan === "tutor-pro" && user.planStatus === "active";
+    const reservation = await users.updateOne(
+      {
+        _id: userId,
+        ...(isProTutor ? {} : { tuitionCount: { $lt: 2 } }),
+      },
+      { $inc: { tuitionCount: 1 } },
+    );
+    if (reservation.matchedCount !== 1) {
+      if (isProTutor) {
+        return res.status(404).json({ success: false, message: "Tutor account not found" });
+      }
+      return res.status(403).json({
+        success: false,
+        message: "Free tutor accounts can create up to 2 tuition posts. Upgrade to Tutor Pro for unlimited posts.",
+      });
+    }
+
     const now = new Date();
     const tuition = {
       ...parsed.data,
@@ -192,7 +235,13 @@ router.post("/", async (req, res, next) => {
       createdAt: now,
       updatedAt: now,
     };
-    const result = await getDB().collection("tuition").insertOne(tuition);
+    let result;
+    try {
+      result = await db.collection("tuition").insertOne(tuition);
+    } catch (error) {
+      await users.updateOne({ _id: userId }, { $inc: { tuitionCount: -1 } });
+      throw error;
+    }
 
     res.status(201).json({
       success: true,
@@ -201,6 +250,99 @@ router.post("/", async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+});
+
+router.patch("/:id", async (req, res, next) => {
+  try {
+    const session = await getSession(req);
+    if (!session) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    if (session.user.role !== "tutor") {
+      return res.status(403).json({ success: false, message: "Tutor access required" });
+    }
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid tuition ID" });
+    }
+
+    const parsed = tuitionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid tuition data",
+        errors: parsed.error.flatten(),
+      });
+    }
+
+    const result = await getDB().collection("tuition").findOneAndUpdate(
+      { _id: new ObjectId(req.params.id), userId: session.user.id },
+      {
+        $set: {
+          ...parsed.data,
+          status: "pending",
+          updatedAt: new Date(),
+        },
+      },
+      { returnDocument: "after" },
+    );
+    if (!result) {
+      return res.status(404).json({ success: false, message: "Tuition not found" });
+    }
+
+    const { _id, ...data } = result;
+    return res.json({
+      success: true,
+      message: "Tuition updated and submitted for review",
+      data: { ...data, id: String(_id) },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.patch("/:id/active", async (req, res, next) => {
+  try {
+    const session = await getSession(req);
+    if (!session) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    if (session.user.role !== "tutor") {
+      return res.status(403).json({ success: false, message: "Tutor access required" });
+    }
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid tuition ID" });
+    }
+
+    const parsed = tuitionActiveSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, message: "Invalid active status" });
+    }
+
+    const result = await getDB().collection("tuition").findOneAndUpdate(
+      {
+        _id: new ObjectId(req.params.id),
+        userId: session.user.id,
+        status: "approved",
+      },
+      { $set: { isActive: parsed.data.isActive, updatedAt: new Date() } },
+      { returnDocument: "after" },
+    );
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        message: "Approved tuition not found for this tutor",
+      });
+    }
+
+    const { _id, ...data } = result;
+    return res.json({
+      success: true,
+      message: "Tuition availability updated",
+      data: { ...data, id: String(_id) },
+    });
+  } catch (error) {
+    return next(error);
   }
 });
 
@@ -255,12 +397,26 @@ router.delete("/:id", async (req, res, next) => {
     const filter = { _id: new ObjectId(req.params.id) };
     if (session.user.role === "tutor") filter.userId = session.user.id;
 
-    const result = await getDB().collection("tuition").deleteOne(filter);
-    if (!result.deletedCount) {
+    const db = getDB();
+    const tuition = await db.collection("tuition").findOne(filter, {
+      projection: { userId: 1 },
+    });
+    if (!tuition) {
       return res.status(404).json({ success: false, message: "Tuition not found" });
     }
 
-    res.json({ success: true, message: "Tuition deleted" });
+    const result = await db.collection("tuition").deleteOne({ _id: tuition._id });
+    if (!result.deletedCount) {
+      return res.status(404).json({ success: false, message: "Tuition not found" });
+    }
+    if (tuition.userId) {
+      await db.collection("user").updateOne(
+        { _id: toDatabaseId(tuition.userId), tuitionCount: { $gt: 0 } },
+        { $inc: { tuitionCount: -1 } },
+      );
+    }
+
+    return res.json({ success: true, message: "Tuition deleted" });
   } catch (error) {
     next(error);
   }

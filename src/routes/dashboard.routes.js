@@ -47,6 +47,7 @@ router.get("/", async (req, res, next) => {
     if (role === "admin") {
       const [
         users,
+        tutors,
         totalTuitions,
         pendingTuitions,
         approvedTuitions,
@@ -55,6 +56,7 @@ router.get("/", async (req, res, next) => {
         revenueResult,
       ] = await Promise.all([
         db.collection("user").countDocuments(),
+        db.collection("user").countDocuments({ role: "tutor" }),
         db.collection("tuition").countDocuments(),
         db.collection("tuition").countDocuments({ status: "pending" }),
         db.collection("tuition").countDocuments({ status: "approved" }),
@@ -74,6 +76,7 @@ router.get("/", async (req, res, next) => {
           planStatus: session.user.planStatus || "inactive",
           stats: {
             users,
+            tutors,
             totalTuitions,
             pendingTuitions,
             approvedTuitions,
@@ -129,6 +132,8 @@ router.get("/", async (req, res, next) => {
         success: true,
         data: {
           role,
+          plan: session.user.plan || "free",
+          planStatus: session.user.planStatus || "inactive",
           stats: {
             totalTuitions: tuitions.length,
             activeTuitions: tuitions.filter(

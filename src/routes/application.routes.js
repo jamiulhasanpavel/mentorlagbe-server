@@ -16,6 +16,8 @@ const getSession = async (req) => {
   });
 };
 
+const toDatabaseId = (id) => (ObjectId.isValid(id) ? new ObjectId(id) : id);
+
 router.post("/", async (req, res, next) => {
   try {
     const session = await getSession(req);
@@ -76,6 +78,7 @@ router.post("/", async (req, res, next) => {
       tuitionId: parsed.data.tuitionId,
       studentId: session.user.id,
       message: parsed.data.message,
+      preferredSchedule: parsed.data.preferredSchedule || "",
       status: "pending",
       createdAt: now,
       updatedAt: now,
@@ -115,18 +118,34 @@ router.get("/me", async (req, res, next) => {
     const tuitions = tuitionIds.length
       ? await db.collection("tuition")
         .find({ _id: { $in: tuitionIds } })
-        .project({ _id: 1, title: 1 })
+        .project({ _id: 1, title: 1, budget: 1, userId: 1 })
         .toArray()
       : [];
-    const tuitionTitles = new Map(tuitions.map(({ _id, title }) => [String(_id), title]));
+    const tutorIds = [...new Set(tuitions.map(({ userId }) => userId).filter(Boolean))]
+      .map(toDatabaseId);
+    const tutors = tutorIds.length
+      ? await db.collection("user")
+        .find({ _id: { $in: tutorIds } })
+        .project({ _id: 1, name: 1, email: 1 })
+        .toArray()
+      : [];
+    const tutorById = new Map(tutors.map((tutor) => [String(tutor._id), tutor]));
+    const tuitionById = new Map(tuitions.map((tuition) => [String(tuition._id), tuition]));
 
     res.json({
       success: true,
-      data: applications.map(({ _id, ...application }) => ({
-        ...application,
-        tuitionTitle: tuitionTitles.get(application.tuitionId) || "Tuition no longer available",
-        id: String(_id),
-      })),
+      data: applications.map(({ _id, ...application }) => {
+        const tuition = tuitionById.get(application.tuitionId);
+        const tutor = tutorById.get(String(toDatabaseId(tuition?.userId || "")));
+        return {
+          ...application,
+          tuitionTitle: tuition?.title || "Tuition no longer available",
+          tutorName: tutor?.name || "Tutor",
+          ...(tutor?.email ? { tutorEmail: tutor.email } : {}),
+          ...(typeof tuition?.budget === "number" ? { monthlyFee: tuition.budget } : {}),
+          id: String(_id),
+        };
+      }),
     });
   } catch (error) {
     next(error);
@@ -155,17 +174,32 @@ router.get("/tutor", async (req, res, next) => {
         .sort({ createdAt: -1 })
         .toArray()
       : [];
+    const studentIds = [...new Set(applications.map(({ studentId }) => studentId).filter(Boolean))]
+      .map(toDatabaseId);
+    const students = studentIds.length
+      ? await db.collection("user")
+        .find({ _id: { $in: studentIds } })
+        .project({ _id: 1, name: 1, email: 1, phone: 1 })
+        .toArray()
+      : [];
+    const studentById = new Map(students.map((student) => [String(student._id), student]));
     const tuitionTitles = new Map(
       tuitions.map(({ _id, title }) => [String(_id), title]),
     );
 
     res.json({
       success: true,
-      data: applications.map(({ _id, ...application }) => ({
-        ...application,
-        tuitionTitle: tuitionTitles.get(application.tuitionId) || "",
-        id: String(_id),
-      })),
+      data: applications.map(({ _id, ...application }) => {
+        const student = studentById.get(String(toDatabaseId(application.studentId)));
+        return {
+          ...application,
+          tuitionTitle: tuitionTitles.get(application.tuitionId) || "",
+          studentName: student?.name || "Student",
+          ...(student?.email ? { studentEmail: student.email } : {}),
+          ...(student?.phone ? { studentPhone: student.phone } : {}),
+          id: String(_id),
+        };
+      }),
     });
   } catch (error) {
     next(error);
@@ -240,11 +274,17 @@ router.delete("/:id", async (req, res, next) => {
 
     const db = getDB();
     const filter = { _id: new ObjectId(req.params.id) };
-    if (session.user.role !== "admin") filter.studentId = session.user.id;
+    if (session.user.role !== "admin") {
+      filter.studentId = session.user.id;
+      filter.status = "pending";
+    }
 
     const result = await db.collection("application").deleteOne(filter);
     if (!result.deletedCount) {
-      return res.status(404).json({ success: false, message: "Application not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Pending application not found for this student",
+      });
     }
 
     res.json({ success: true, message: "Application deleted" });

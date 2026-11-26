@@ -9,7 +9,7 @@ import { userProfileSchema } from "../validations/user.validation.js";
 const router = Router();
 
 const updateRoleSchema = z.object({
-  role: z.enum(["student", "tutor"]),
+  role: z.enum(["student", "tutor", "admin"]),
 });
 
 const getSession = async (req) => {
@@ -96,8 +96,17 @@ router.patch("/admin/:id/role", async (req, res, next) => {
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
-    if (user.role === "admin") {
-      return res.status(403).json({ success: false, message: "Administrator roles cannot be changed here" });
+    if (String(userId) === session.user.id) {
+      return res.status(403).json({ success: false, message: "You cannot change your own role" });
+    }
+    if (user.role === "admin" && parsed.data.role !== "admin") {
+      const adminCount = await users.countDocuments({ role: "admin" });
+      if (adminCount <= 1) {
+        return res.status(409).json({
+          success: false,
+          message: "The last administrator cannot be demoted",
+        });
+      }
     }
 
     await users.updateOne(

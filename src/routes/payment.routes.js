@@ -311,10 +311,32 @@ router.get("/admin", async (req, res, next) => {
         .toArray(),
       collection.countDocuments(),
     ]);
+    const userIds = [...new Set(payments.map(({ userId }) => userId).filter(Boolean))]
+      .map(toDatabaseId);
+    const users = userIds.length
+      ? await getDB().collection("user")
+        .find({ _id: { $in: userIds } })
+        .project({ _id: 1, name: 1, email: 1, role: 1 })
+        .toArray()
+      : [];
+    const userById = new Map(users.map((user) => [String(user._id), user]));
 
     return res.json({
       success: true,
-      data: payments.map(({ _id, ...payment }) => ({ ...payment, id: String(_id) })),
+      data: payments.map(({ _id, ...payment }) => {
+        const user = userById.get(String(toDatabaseId(payment.userId)));
+        return {
+          ...payment,
+          ...(user
+            ? {
+                userName: user.name,
+                userEmail: user.email,
+                userRole: user.role,
+              }
+            : {}),
+          id: String(_id),
+        };
+      }),
       pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
     });
   } catch (error) {
